@@ -1,0 +1,102 @@
+name: 📱 Build Android APK (Auto-ZIP)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - '**.zip'
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'URL do Backend (Ex: https://flux-api.onrender.com)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: 🏗️ Build APK Conectado
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout do Repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 Localizar e Extrair ZIP
+        id: extract
+        run: |
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" -print -quit)
+          
+          if [ -z "$ZIP_FILE" ]; then
+            echo "⚠️ Nenhum arquivo .zip encontrado. Usando arquivos atuais do repositório."
+          else
+            echo "📂 ZIP detectado: $ZIP_FILE. Iniciando extração..."
+            mkdir -p temp_extract
+            unzip -o "$ZIP_FILE" -d temp_extract
+            
+            # Localizar a raiz real do projeto (onde está o package.json)
+            PKG_PATH=$(find temp_extract -name "package.json" -print -quit)
+            if [ -z "$PKG_PATH" ]; then
+              echo "❌ Erro Crítico: package.json não encontrado dentro do ZIP."
+              exit 1
+            fi
+            
+            ROOT_DIR=$(dirname "$PKG_PATH")
+            echo "📂 Raiz do projeto identificada em: $ROOT_DIR"
+            
+            # Sobrescrever arquivos na raiz do repo para o build
+            cp -rf "$ROOT_DIR"/. .
+            rm -rf temp_extract
+            rm "$ZIP_FILE"
+            echo "✅ Estrutura preparada para o Backend Único."
+          fi
+
+      - name: 🟢 Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: ☕ Configurar Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: 🛠️ Instalar Dependências
+        run: npm install
+
+      - name: 🏗️ Build do Frontend (Vite)
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_url || secrets.VITE_API_BASE_URL || 'https://flux-api.onrender.com' }}
+
+      - name: 📲 Sincronizar Capacitor (Android)
+        run: |
+          if [ ! -d "android" ]; then
+            echo "🤖 Inicializando plataforma Android nativa..."
+            npx cap add android
+          fi
+          
+          # Garante que o build web seja copiado para o projeto Android
+          npx cap copy android
+          npx cap sync android
+
+      - name: 🔨 Gerar APK (Gradle)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_url || secrets.VITE_API_BASE_URL || 'https://flux-api.onrender.com' }}
+
+      - name: 🚀 Disponibilizar APK para Download
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flux-App-Connected
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+          
